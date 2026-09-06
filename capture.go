@@ -135,16 +135,13 @@ func capture(ctx context.Context, cfg *Config, cookies []*http.Cookie, savedUA s
 		}
 	}()
 
-	b, err := chrome.Launch(ctx, chrome.Options{UserDataDir: profile, Headless: cfg.Headless, Foreground: cfg.Foreground})
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	b, err := launch(ctx, cctx, profile, cfg)
 	if err != nil {
 		return nil, err
 	}
 	defer b.Close()
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := b.Connect(cctx); err != nil {
-		return nil, err
-	}
 	// cf_clearance は発行時の User-Agent に紐づく。ログインに使った Chrome と別物なら
 	// 何を観測しても 403 になるので、先に気づけるようにする。
 	if ua, err := b.UserAgent(cctx); err == nil && savedUA != "" && ua != savedUA {
@@ -191,6 +188,35 @@ func capture(ctx context.Context, cfg *Config, cookies []*http.Cookie, savedUA s
 	}
 	rec.finish()
 	return rec.har, nil
+}
+
+// launch は Chrome を起動して CDP に繋ぐ。既定の背面起動 (`open -g`) は、LaunchServices に
+// 届かないサンドボックス内などで失敗するか、Chrome を起こせないまま固まる。
+// その場合は前面起動でやり直す。観測が目的なので、窓が前に出ることより結果が取れないことの方が困る。
+//
+// ctx は Chrome プロセスの寿命、connectCtx は接続待ちの期限。分けるのは、
+// 接続の短い期限をプロセスに渡すと、その時間で Chrome ごと殺されてしまうため。
+func launch(ctx, connectCtx context.Context, profile string, cfg *Config) (*chrome.Browser, error) {
+	opts := chrome.Options{UserDataDir: profile, Headless: cfg.Headless, Foreground: cfg.Foreground}
+	b, err := connect(ctx, connectCtx, opts)
+	if err != nil && !opts.Foreground && !opts.Headless && connectCtx.Err() == nil {
+		slog.Warn("背面起動に失敗したので前面で起動し直します", "err", err)
+		opts.Foreground = true
+		b, err = connect(ctx, connectCtx, opts)
+	}
+	return b, err
+}
+
+func connect(ctx, connectCtx context.Context, opts chrome.Options) (*chrome.Browser, error) {
+	b, err := chrome.Launch(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Connect(connectCtx); err != nil {
+		b.Close()
+		return nil, err
+	}
+	return b, nil
 }
 
 // waitSettled はチャレンジでも 3xx でもない Document 応答が来るまでイベントを処理する。

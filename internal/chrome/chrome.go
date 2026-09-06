@@ -325,7 +325,12 @@ func (b *Browser) Close() {
 	if b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
 	}
-	<-b.exited
+	// Kill が届かない相手 (サンドボックス内で固まった open など) を無期限に待たない。
+	select {
+	case <-b.exited:
+	case <-time.After(5 * time.Second):
+		slog.Warn("Chrome の終了を待ちきれませんでした。プロセスが残っているかもしれません", "pid", b.cmd.Process.Pid)
+	}
 }
 
 // Page はタブ 1 枚 (flatten セッション)。
