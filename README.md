@@ -51,8 +51,10 @@ apigap sanitize -c capture/apigap.yaml --har exported.har   # DevTools で取っ
 ### apigap.yaml
 
 相対パスは設定ファイルのあるディレクトリ基準。`~` と `${VAR:-default}` を展開します。
+JSON Schema を `schema/` に置いてあるので、先頭に `$schema` コメントを書くとエディタで補完と検証が効きます。
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/usadamasa/apigap/main/schema/apigap.schema.json
 base_url: https://app.example.com
 hosts: []                                    # base_url 以外に gap の対象にするホスト
 cookies: ${XDG_CACHE_HOME:-~/.cache}/myapp/cookies.json
@@ -86,6 +88,7 @@ normalize:
 ### シナリオ
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/usadamasa/apigap/main/schema/scenario.schema.json
 name: detail
 steps:
   - navigate: /items/42                     # / 始まりは base_url に対する相対パス

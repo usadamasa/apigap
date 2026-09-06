@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/usadamasa/apigap/main/schema/apigap.schema.json",
+  "title": "apigap configuration",
+  "description": "apigap.yaml の形。相対パスは設定ファイルのあるディレクトリ基準で、~ と ${VAR:-default} を展開する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_url"],
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "シナリオの相対パスを解決する origin。gap はこのホストの通信だけを見る。"
+    },
+    "hosts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "base_url のホストに加えて gap の対象にするホスト。"
+    },
+    "cookies": {
+      "type": "string",
+      "description": "ブラウザに注入する Cookie ファイル ({\"cookies\":[{name,value,domain,path,...}]})。capture に必須。"
+    },
+    "scenarios": {
+      "type": "string",
+      "description": "シナリオ YAML を置くディレクトリ。ファイル名順に実行する。capture に必須。"
+    },
+    "output": {
+      "type": "string",
+      "description": "capture が書く HAR のパス。gap と sanitize の既定の入力にもなる。"
+    },
+    "headless": {
+      "type": "boolean",
+      "default": false,
+      "description": "--headless=new で起動する。Cloudflare Turnstile 配下では通らない。"
+    },
+    "foreground": {
+      "type": "boolean",
+      "default": false,
+      "description": "Chrome の窓を前面に出す。既定では macOS で open -g を使い、作業中のアプリからフォーカスを奪わない。"
+    },
+    "settle_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30000,
+      "description": "navigate 後、チャレンジでも 3xx でもない Document 応答を待つ上限 (ミリ秒)。"
+    },
+    "api_prefixes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^/" },
+      "description": "指定すると、gap はこの prefix に前方一致するパスだけを API とみなす。空なら同一ホストの document / xhr / fetch / other をすべて対象にする。"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "リポジトリが既に知っているエンドポイントの出どころ。",
+      "properties": {
+        "spec": {
+          "type": "string",
+          "description": "OpenAPI spec。paths のテンプレートが covered の根拠になる。省略可。"
+        },
+        "code": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "URL リテラルを走査する Go ソースのディレクトリ。"
+        }
+      }
+    },
+    "filter": {
+      "type": "string",
+      "description": "gap が filtered と報告する prefix の一覧ファイル (1 行 1 prefix、# 以降は理由)。"
+    },
+    "normalize": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "観測パスを 1 行に畳むための規則。",
+      "properties": {
+        "trailing_slash": {
+          "type": "boolean",
+          "default": false,
+          "description": "末尾スラッシュの有無を同一視する (Django 系のサイト向け)。"
+        },
+        "rules": {
+          "type": "array",
+          "description": "UUID と数値セグメントの既定に加えて適用する置換。上から順に適用する。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pattern", "replace"],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Go の regexp 構文。"
+              },
+              "replace": {
+                "type": "string",
+                "description": "置換文字列。${1} の形で部分一致を参照できる。"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

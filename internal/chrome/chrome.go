@@ -12,12 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,16 +40,17 @@ type Options struct {
 
 // Browser は起動した Chrome プロセスと、その CDP 接続。
 type Browser struct {
-	cmd        *exec.Cmd
-	background bool // `open` 経由で起動した。cmd は open であって Chrome ではない
-	port       int
-	exited     chan error
-	conn       *chromedp.Conn
-	next       atomic.Int64
-	mu         sync.Mutex
-	pending    map[int64]chan *cdproto.Message
-	in         chan *cdproto.Message
-	events     chan *cdproto.Message
+	cmd         *exec.Cmd
+	background  bool // `open` 経由で起動した。cmd は open であって Chrome ではない
+	userDataDir string
+	port        int // DevToolsActivePort から読めるまでは 0
+	exited      chan error
+	conn        *chromedp.Conn
+	next        atomic.Int64
+	mu          sync.Mutex
+	pending     map[int64]chan *cdproto.Message
+	in          chan *cdproto.Message
+	events      chan *cdproto.Message
 }
 
 // Launch は Chrome を起動する。CDP にはまだ繋がない (Connect を呼ぶ)。
@@ -64,13 +66,12 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 	if err := os.MkdirAll(opts.UserDataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("Chrome プロファイルディレクトリの作成に失敗しました: %w", err)
 	}
-	port, err := freePort()
-	if err != nil {
-		return nil, err
-	}
+	// ポートは Chrome に選ばせ、user-data-dir に書かれる DevToolsActivePort から読む。
+	// 自分で空きポートを探すと、見つけてから Chrome が掴むまでの競合と、
+	// listen を許さないサンドボックスでの失敗を抱え込む。
 	args := []string{
 		"--user-data-dir=" + opts.UserDataDir,
-		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--remote-debugging-port=0",
 		"--no-first-run",
 		"--no-default-browser-check",
 	}
@@ -83,8 +84,8 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 	background := false
 	if bundle := macOSAppBundle(path); bundle != "" && !opts.Foreground && !opts.Headless {
 		// `open -g` は LaunchServices に「前面に出さず起動」を頼める唯一の手段。stdio は
-		// 引き継がれないが、こちらは DevTools ポートを自分で決めて /json/version を
-		// ポーリングするので困らない。`-n` で新規インスタンス (既に開いている Chrome に
+		// 引き継がれないが、こちらはポートを DevToolsActivePort ファイルから読むので
+		// 困らない。`-n` で新規インスタンス (既に開いている Chrome に
 		// 引数を渡さない)、`-W` で Chrome の終了まで open が生き、exited がそのまま使える。
 		openArgs := append([]string{"-g", "-n", "-W", "-a", bundle, "--args"}, args...)
 		cmd = exec.CommandContext(ctx, "open", openArgs...) // #nosec G204 -- 引数は固定のフラグとパス
@@ -96,17 +97,32 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 		return nil, fmt.Errorf("Chrome の起動に失敗しました: %w", err)
 	}
 	b := &Browser{
-		cmd:        cmd,
-		background: background,
-		port:       port,
-		exited:     make(chan error, 1),
-		pending:    map[int64]chan *cdproto.Message{},
-		in:         make(chan *cdproto.Message),
-		events:     make(chan *cdproto.Message),
+		cmd:         cmd,
+		background:  background,
+		userDataDir: opts.UserDataDir,
+		exited:      make(chan error, 1),
+		pending:     map[int64]chan *cdproto.Message{},
+		in:          make(chan *cdproto.Message),
+		events:      make(chan *cdproto.Message),
 	}
 	go func() { b.exited <- cmd.Wait() }()
-	slog.Debug("Chrome を起動しました", "pid", cmd.Process.Pid, "port", port, "headless", opts.Headless, "background", background)
+	slog.Debug("Chrome を起動しました", "pid", cmd.Process.Pid, "headless", opts.Headless, "background", background)
 	return b, nil
+}
+
+// activePort は Chrome が user-data-dir に書く DevToolsActivePort (1 行目がポート) を読む。
+// 起動直後はまだ無い。
+func (b *Browser) activePort() (int, error) {
+	data, err := os.ReadFile(filepath.Join(b.userDataDir, "DevToolsActivePort")) // #nosec G304 -- 自分で作ったプロファイル配下
+	if err != nil {
+		return 0, err
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	port, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || port <= 0 {
+		return 0, fmt.Errorf("DevToolsActivePort の内容が不正です: %q", line)
+	}
+	return port, nil
 }
 
 // macOSAppBundle は Chrome バイナリのパスから .app バンドルのパスを返す。
@@ -147,13 +163,21 @@ type versionInfo struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-// version は /json/version をポーリングして取得する。Chrome の起動直後は listen していない。
+// version は /json/version をポーリングして取得する。Chrome の起動直後は
+// DevToolsActivePort がまだ無く、あっても listen し始めるまでは少し間がある。
 func (b *Browser) version(ctx context.Context) (*versionInfo, error) {
-	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", b.port)
 	var lastErr error
 	for range 50 {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		resp, err := http.DefaultClient.Do(req)
+		var err error
+		if b.port == 0 {
+			b.port, err = b.activePort()
+		}
+		var resp *http.Response
+		if err == nil {
+			url := fmt.Sprintf("http://127.0.0.1:%d/json/version", b.port)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			resp, err = http.DefaultClient.Do(req)
+		}
 		if err == nil {
 			var v versionInfo
 			err = json.NewDecoder(resp.Body).Decode(&v)
@@ -295,8 +319,8 @@ func (b *Browser) Close() {
 	}
 	if b.background {
 		// open 経由だと握っているのは open のプロセスで、Kill しても Chrome には届かない。
-		// DevTools ポートはこの起動だけのものなので、それを手掛かりに Chrome 本体を落とす。
-		_ = exec.Command("pkill", "-f", fmt.Sprintf("--remote-debugging-port=%d", b.port)).Run() // #nosec G204 -- port は自分で採番した整数
+		// user-data-dir はこの起動だけのものなので、それを手掛かりに Chrome 本体を落とす。
+		_ = exec.Command("pkill", "-f", "--user-data-dir="+b.userDataDir).Run() // #nosec G204 -- 自分で作った一時ディレクトリのパス
 	}
 	if b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
@@ -364,15 +388,6 @@ func (p *Page) Navigate(ctx context.Context, url string) error {
 		return fmt.Errorf("%s への遷移に失敗しました: %s", url, nav.ErrorText)
 	}
 	return nil
-}
-
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, fmt.Errorf("空きポートの取得に失敗しました: %w", err)
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 // findChrome はシステムの Chrome を探す (macOS / Linux)。

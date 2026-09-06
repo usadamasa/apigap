@@ -28,6 +28,7 @@ func runCapture(args []string) error {
 	configPath := fs.String("c", "apigap.yaml", "設定ファイル")
 	output := fs.String("output", "", "HAR の出力先 (既定は設定の output)")
 	verbose := fs.Bool("verbose", false, "デバッグログを出力する")
+	foreground := fs.Bool("foreground", false, "Chrome の窓を前面に出す (設定の foreground を上書き)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -43,6 +44,9 @@ func runCapture(args []string) error {
 	}
 	if *output != "" {
 		cfg.Output = *output
+	}
+	if *foreground {
+		cfg.Foreground = true
 	}
 	if cfg.Output == "" || cfg.Scenarios == "" || cfg.Cookies == "" {
 		return errors.New("設定に cookies / scenarios / output が要ります")
