@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: '3'
+
+tasks:
+  build:
+    desc: bin/apigap をビルドする
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/apigap .
+
+  test:
+    desc: テストを実行する
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: フォーマットと静的解析
+    cmds:
+      - test -z "$(gofmt -l . | grep -v '^tmp/')"
+      - go vet ./...
+
+  ci:
+    desc: lint + test + build
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
