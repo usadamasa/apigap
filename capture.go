@@ -52,7 +52,7 @@ func runCapture(args []string) error {
 		return errors.New("設定に cookies / scenarios / output が要ります")
 	}
 
-	cookies, ua, err := loadCookies(cfg.Cookies)
+	cookies, ua, err := loadCookies(cfg.Cookies, cfg.CookieKeys)
 	if err != nil {
 		return err
 	}
@@ -79,49 +79,99 @@ func runCapture(args []string) error {
 	return err
 }
 
-// cookieFile はログイン用 CLI が書く cookies.json のうち、注入に要る部分。
-type cookieFile struct {
-	UserAgent string `json:"user_agent"`
-	Cookies   []struct {
-		Name     string    `json:"name"`
-		Value    string    `json:"value"`
-		Domain   string    `json:"domain"`
-		Path     string    `json:"path"`
-		Expires  time.Time `json:"expires,omitzero"`
-		HTTPOnly bool      `json:"httpOnly"`
-		Secure   bool      `json:"secure"`
-	} `json:"cookies"`
-}
-
 // loadCookies は期限切れを除いた Cookie と、あれば保存時の User-Agent を返す。
-func loadCookies(path string) ([]*http.Cookie, string, error) {
+// Cookie ファイルの形はログイン用 CLI ごとに違うので、キー名は keys で受け取る。
+func loadCookies(path string, keys CookieKeys) ([]*http.Cookie, string, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- 設定で指定された Cookie ファイル
 	if err != nil {
 		return nil, "", fmt.Errorf("Cookie ファイルの読み込みに失敗しました: %w", err)
 	}
-	var f cookieFile
-	if err := json.Unmarshal(data, &f); err != nil {
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, "", fmt.Errorf("Cookie ファイルの解析に失敗しました (%s): %w", path, err)
 	}
+	list, ok := lookupKey(root, keys.Cookies).([]any)
+	if !ok {
+		return nil, "", fmt.Errorf("%s: %q に Cookie の配列がありません (cookie_keys.cookies を確かめてください)", path, keys.Cookies)
+	}
+	ua, _ := lookupKey(root, keys.UserAgent).(string)
+
 	now := time.Now()
 	var out []*http.Cookie
 	var names []string
-	for _, c := range f.Cookies {
-		if !c.Expires.IsZero() && c.Expires.Before(now) {
+	for i, e := range list {
+		c, ok := e.(map[string]any)
+		if !ok {
+			return nil, "", fmt.Errorf("%s: %s[%d] がオブジェクトではありません", path, keys.Cookies, i)
+		}
+		name, _ := c[keys.Name].(string)
+		value, _ := c[keys.Value].(string)
+		if name == "" || value == "" {
+			return nil, "", fmt.Errorf("%s: %s[%d] から名前と値を取れません (cookie_keys.name / cookie_keys.value を確かめてください)", path, keys.Cookies, i)
+		}
+		expires, err := cookieExpires(c[keys.Expires])
+		if err != nil {
+			return nil, "", fmt.Errorf("%s: %s[%d].%s: %w (cookie_keys.expires を確かめてください)", path, keys.Cookies, i, keys.Expires, err)
+		}
+		if !expires.IsZero() && expires.Before(now) {
 			continue
 		}
+		domain, _ := c[keys.Domain].(string)
+		cookiePath, _ := c[keys.Path].(string)
+		httpOnly, _ := c[keys.HTTPOnly].(bool)
+		secure, _ := c[keys.Secure].(bool)
 		out = append(out, &http.Cookie{ // #nosec G124 -- 保存済み Cookie をそのまま再送する
-			Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
-			Expires: c.Expires, HttpOnly: c.HTTPOnly, Secure: c.Secure,
+			Name: name, Value: value, Domain: domain, Path: cookiePath,
+			Expires: expires, HttpOnly: httpOnly, Secure: secure,
 		})
-		names = append(names, c.Name)
+		names = append(names, name)
 	}
 	if len(out) == 0 {
 		return nil, "", fmt.Errorf("%s に有効な Cookie がありません (ログインし直してください)", path)
 	}
 	// 名前だけ出す。値は出さない。
 	slog.Info("Cookie を読みました", "count", len(out), "names", strings.Join(names, ","))
-	return out, f.UserAgent, nil
+	return out, ua, nil
+}
+
+// lookupKey は "." 区切りのキーで JSON をたどる。途中で外れたら nil。
+func lookupKey(v any, key string) any {
+	if key == "" {
+		return nil
+	}
+	for k := range strings.SplitSeq(key, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[k]
+	}
+	return v
+}
+
+// cookieExpires は有効期限を time.Time にする。RFC3339 の文字列と、Playwright や
+// Chrome 拡張が書く epoch 秒の数値の両方を受ける。0 以下と欠落はセッション Cookie。
+func cookieExpires(v any) (time.Time, error) {
+	switch x := v.(type) {
+	case nil:
+		return time.Time{}, nil
+	case float64:
+		if x <= 0 {
+			return time.Time{}, nil
+		}
+		return time.Unix(int64(x), 0), nil
+	case string:
+		if x == "" {
+			return time.Time{}, nil
+		}
+		t, err := time.Parse(time.RFC3339, x)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("有効期限を読めません (%q)", x)
+		}
+		return t, nil
+	default:
+		return time.Time{}, fmt.Errorf("有効期限が文字列でも数値でもありません (%T)", v)
+	}
 }
 
 func capture(ctx context.Context, cfg *Config, cookies []*http.Cookie, savedUA string, scenarios []Scenario) (*HAR, error) {

@@ -54,9 +54,30 @@ normalize:
 	if cfg.SettleTimeoutMs != defaultSettleTimeoutMs {
 		t.Errorf("settle_timeout_ms の既定 = %d", cfg.SettleTimeoutMs)
 	}
+	if cfg.CookieKeys != defaultCookieKeys() {
+		t.Errorf("cookie_keys 未指定なら既定値: %+v", cfg.CookieKeys)
+	}
 	hosts := cfg.HostSet()
 	if !hosts["app.example.com"] || !hosts["cdn.example.org"] || len(hosts) != 2 {
 		t.Errorf("HostSet = %v", hosts)
+	}
+}
+
+func TestLoadConfig_MergesCookieKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "apigap.yaml")
+	src := "base_url: https://app.example.com\ncookie_keys:\n  cookies: session.jar\n  name: n\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	want := defaultCookieKeys()
+	want.Cookies, want.Name = "session.jar", "n"
+	if cfg.CookieKeys != want {
+		t.Errorf("cookie_keys = %+v, want %+v", cfg.CookieKeys, want)
 	}
 }
 
