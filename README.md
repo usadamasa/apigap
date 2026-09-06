@@ -72,16 +72,12 @@ coverage:
 
 filter: endpoint-filter.txt                  # 1 行 1 prefix、# 以降が理由
 
-cookie_keys:                                 # Cookie ファイルのキー名。省略した項目は既定値
-  cookies: session.jar                       # Cookie 配列の位置。"." 区切りで入れ子をたどる
-  user_agent: ua
-  name: n
-  value: v
-  domain: host
-  path: p
-  expires: exp
-  http_only: httpOnly
-  secure: secure
+cookie_keys:                                 # Cookie ファイルのキー名。既定と違うものだけ書く
+  cookies: session.jar                       # Cookie 配列の位置 (既定 cookies)。"." 区切りで入れ子をたどる
+  user_agent: ua                             # 既定 user_agent
+  name: n                                    # 以下は Cookie 1 件の中のキー名
+  value: v                                   # 既定は name / value / domain / path / expires /
+  expires: exp                               #   http_only (httpOnly) / secure
 
 normalize:
   trailing_slash: false                      # 末尾スラッシュ有無を同一視する (Django 系向け)

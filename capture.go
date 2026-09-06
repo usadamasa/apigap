@@ -105,8 +105,9 @@ func loadCookies(path string, keys CookieKeys) ([]*http.Cookie, string, error) {
 			return nil, "", fmt.Errorf("%s: %s[%d] がオブジェクトではありません", path, keys.Cookies, i)
 		}
 		name, _ := c[keys.Name].(string)
-		value, _ := c[keys.Value].(string)
-		if name == "" || value == "" {
+		// 値は空でもよい (サイトは foo= で Cookie を消す)。キーごと無いのは対応づけの誤り。
+		value, hasValue := c[keys.Value].(string)
+		if name == "" || !hasValue {
 			return nil, "", fmt.Errorf("%s: %s[%d] から名前と値を取れません (cookie_keys.name / cookie_keys.value を確かめてください)", path, keys.Cookies, i)
 		}
 		expires, err := cookieExpires(c[keys.Expires])

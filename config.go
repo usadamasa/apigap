@@ -58,7 +58,7 @@ type CookieKeys struct {
 	Secure   string `yaml:"secure,omitempty"`
 }
 
-// defaultCookieKeys は Chrome DevTools の Cookie エクスポートに近い一般的な形。
+// defaultCookieKeys は cookie_keys を書かなかったときに使う従来の形。
 func defaultCookieKeys() CookieKeys {
 	return CookieKeys{
 		Cookies: "cookies", UserAgent: "user_agent",

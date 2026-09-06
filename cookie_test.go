@@ -21,6 +21,7 @@ func writeCookieFile(t *testing.T, src string) string {
 func TestLoadCookies_DefaultKeys(t *testing.T) {
 	path := writeCookieFile(t, `{"user_agent":"Foo/1","cookies":[
 	  {"name":"sid","value":"abc","domain":"app.example.com","path":"/","expires":"2099-01-01T00:00:00Z","httpOnly":true,"secure":true},
+	  {"name":"cleared","value":""},
 	  {"name":"old","value":"x","expires":"2000-01-01T00:00:00Z"}
 	]}`)
 	cookies, ua, err := loadCookies(path, defaultCookieKeys())
@@ -30,8 +31,8 @@ func TestLoadCookies_DefaultKeys(t *testing.T) {
 	if ua != "Foo/1" {
 		t.Errorf("user_agent = %q", ua)
 	}
-	if len(cookies) != 1 || cookies[0].Name != "sid" {
-		t.Fatalf("期限切れを除いた 1 件のはず: %+v", cookies)
+	if len(cookies) != 2 || cookies[0].Name != "sid" || cookies[1].Name != "cleared" {
+		t.Fatalf("期限切れだけ落ち、値が空のものは残るはず: %+v", cookies)
 	}
 	c := cookies[0]
 	if c.Value != "abc" || c.Domain != "app.example.com" || c.Path != "/" || !c.HttpOnly || !c.Secure {
