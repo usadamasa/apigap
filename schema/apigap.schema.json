@@ -19,7 +19,35 @@
     },
     "cookies": {
       "type": "string",
-      "description": "ブラウザに注入する Cookie ファイル ({\"cookies\":[{name,value,domain,path,...}]})。capture に必須。"
+      "description": "ブラウザに注入する Cookie を書いた JSON ファイル。capture に必須。構造は cookie_keys で対応づける。"
+    },
+    "cookie_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cookie ファイルの JSON キー名。ログイン用 CLI ごとに形が違うので、apigap 側は構造を前提にせず対応づけを受け取る。省略した項目は既定値。",
+      "properties": {
+        "cookies": {
+          "type": "string",
+          "default": "cookies",
+          "description": "Cookie 配列の位置。\".\" 区切りで入れ子をたどる (例: session.jar)。"
+        },
+        "user_agent": {
+          "type": "string",
+          "default": "user_agent",
+          "description": "保存時の User-Agent の位置。見つからなければ照合しない。"
+        },
+        "name": { "type": "string", "default": "name", "description": "Cookie 1 件の名前のキー。" },
+        "value": { "type": "string", "default": "value", "description": "Cookie 1 件の値のキー。" },
+        "domain": { "type": "string", "default": "domain", "description": "Cookie 1 件のドメインのキー。" },
+        "path": { "type": "string", "default": "path", "description": "Cookie 1 件のパスのキー。" },
+        "expires": {
+          "type": "string",
+          "default": "expires",
+          "description": "有効期限のキー。RFC3339 の文字列と epoch 秒の数値を受ける。0 以下と欠落はセッション Cookie 扱い。"
+        },
+        "http_only": { "type": "string", "default": "httpOnly", "description": "HttpOnly 属性のキー。" },
+        "secure": { "type": "string", "default": "secure", "description": "Secure 属性のキー。" }
+      }
     },
     "scenarios": {
       "type": "string",

@@ -17,8 +17,10 @@ type Config struct {
 	BaseURL string `yaml:"base_url"`
 	// Hosts は base_url のホストに加えて gap の対象にするホスト。
 	Hosts []string `yaml:"hosts,omitempty"`
-	// Cookies はブラウザに注入する Cookie ファイル ({"cookies":[{name,value,domain,path,...}]})。
+	// Cookies はブラウザに注入する Cookie を書いた JSON ファイル。
 	Cookies string `yaml:"cookies"`
+	// CookieKeys は Cookies の JSON から値を取り出すキー名。省略時は既定値。
+	CookieKeys CookieKeys `yaml:"cookie_keys"`
 	// Scenarios はシナリオ YAML を置くディレクトリ。
 	Scenarios string `yaml:"scenarios"`
 	// Output は capture が書く HAR のパス。
@@ -37,6 +39,50 @@ type Config struct {
 	// Filter は gap が「除外済み」と報告する prefix の一覧ファイル (1 行 1 prefix、# 以降は理由)。
 	Filter    string    `yaml:"filter,omitempty"`
 	Normalize Normalize `yaml:"normalize"`
+}
+
+// CookieKeys は Cookie ファイルの JSON キー名。Cookie ファイルはログイン用の CLI が
+// それぞれの都合で書くので、apigap 側は特定の構造を前提にせず、対応づけを設定で受け取る。
+type CookieKeys struct {
+	// Cookies は Cookie 配列の位置。"." 区切りで入れ子をたどる (例: session.jar)。
+	Cookies string `yaml:"cookies,omitempty"`
+	// UserAgent は保存時の User-Agent の位置。無ければ照合しない。
+	UserAgent string `yaml:"user_agent,omitempty"`
+	// 以下は Cookie 1 件の中のキー名。name と value 以外は無くてもよい。
+	Name     string `yaml:"name,omitempty"`
+	Value    string `yaml:"value,omitempty"`
+	Domain   string `yaml:"domain,omitempty"`
+	Path     string `yaml:"path,omitempty"`
+	Expires  string `yaml:"expires,omitempty"`
+	HTTPOnly string `yaml:"http_only,omitempty"`
+	Secure   string `yaml:"secure,omitempty"`
+}
+
+// defaultCookieKeys は cookie_keys を書かなかったときに使う従来の形。
+func defaultCookieKeys() CookieKeys {
+	return CookieKeys{
+		Cookies: "cookies", UserAgent: "user_agent",
+		Name: "name", Value: "value", Domain: "domain", Path: "path",
+		Expires: "expires", HTTPOnly: "httpOnly", Secure: "secure",
+	}
+}
+
+// withDefaults は未指定のキーを既定値で埋める。
+func (k CookieKeys) withDefaults() CookieKeys {
+	d := defaultCookieKeys()
+	for _, f := range []struct {
+		dst *string
+		def string
+	}{
+		{&k.Cookies, d.Cookies}, {&k.UserAgent, d.UserAgent},
+		{&k.Name, d.Name}, {&k.Value, d.Value}, {&k.Domain, d.Domain}, {&k.Path, d.Path},
+		{&k.Expires, d.Expires}, {&k.HTTPOnly, d.HTTPOnly}, {&k.Secure, d.Secure},
+	} {
+		if *f.dst == "" {
+			*f.dst = f.def
+		}
+	}
+	return k
 }
 
 // Coverage は「リポジトリが既に知っているエンドポイント」の出どころ。
@@ -84,6 +130,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.Cookies = resolvePath(base, cfg.Cookies)
+	cfg.CookieKeys = cfg.CookieKeys.withDefaults()
 	cfg.Scenarios = resolvePath(base, cfg.Scenarios)
 	cfg.Output = resolvePath(base, cfg.Output)
 	cfg.Coverage.Spec = resolvePath(base, cfg.Coverage.Spec)

@@ -72,6 +72,13 @@ coverage:
 
 filter: endpoint-filter.txt                  # 1 行 1 prefix、# 以降が理由
 
+cookie_keys:                                 # Cookie ファイルのキー名。既定と違うものだけ書く
+  cookies: session.jar                       # Cookie 配列の位置 (既定 cookies)。"." 区切りで入れ子をたどる
+  user_agent: ua                             # 既定 user_agent
+  name: n                                    # 以下は Cookie 1 件の中のキー名
+  value: v                                   # 既定は name / value / domain / path / expires /
+  expires: exp                               #   http_only (httpOnly) / secure
+
 normalize:
   trailing_slash: false                      # 末尾スラッシュ有無を同一視する (Django 系向け)
   rules:                                     # UUID・数値セグメントの既定に加える置換
@@ -81,9 +88,16 @@ normalize:
 
 ### Cookie ファイル
 
+Cookie を書いた JSON。既定では
 `{"cookies": [{"name", "value", "domain", "path", "expires"?, "httpOnly", "secure"}], "user_agent"?}`
-の JSON。期限切れは読み飛ばします。`user_agent` があれば起動した Chrome の UA と比べ、
-違えば警告します (Cloudflare の `cf_clearance` は発行時の UA に紐づくため)。
+の形を読みますが、ログイン用の CLI が書く形はツールごとに違うので、キー名は `cookie_keys` で
+対応づけます。apigap 側は特定の構造を前提にしません。
+
+`expires` は RFC3339 の文字列と epoch 秒の数値のどちらでも構いません。0 以下と欠落は
+セッション Cookie とみなし、期限切れは読み飛ばします。`user_agent` があれば起動した Chrome の
+UA と比べ、違えば警告します (Cloudflare の `cf_clearance` は発行時の UA に紐づくため)。
+
+配列がルート直下にある形 (`[{...}]`) は読めません。必要になったら対応を足します。
 
 ### シナリオ
 
