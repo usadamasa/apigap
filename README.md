@@ -14,6 +14,8 @@ DevTools で覗いて手で写すのは再現性がありません。apigap は�
 1. **capture** は、Cookie を注入した Chrome でシナリオのページを順に開き、Network イベントを HAR 1.2 に落とします。
 2. **gap** は、HAR に現れたエンドポイントをリポジトリの OpenAPI spec と Go ソースの URL リテラルに
    突き合わせ、`covered` / `uncovered` / `filtered` の 3 状態で報告します。
+3. **probe** は、同じ Cookie を素の HTTP クライアントに載せて、ブラウザを起こさずに
+   どこまで届くかを測ります。
 
 Chrome の操作には Playwright や chromedp の高レベル API を使わず、生の CDP を使います。
 Cloudflare Turnstile 配下のサイトでは、`Runtime.enable` を打った時点でチャレンジが解けなくなるためです。
@@ -46,6 +48,7 @@ apigap capture -c capture/apigap.yaml          # → HAR を書く
 apigap gap -c capture/apigap.yaml              # → Markdown の表
 apigap gap -c capture/apigap.yaml --format json
 apigap sanitize -c capture/apigap.yaml --har exported.har   # DevTools で取った HAR の秘匿値を潰す
+apigap probe -c capture/apigap.yaml https://app.example.com/items/42   # ブラウザ無しで叩けるか
 ```
 
 ### apigap.yaml
@@ -131,3 +134,53 @@ steps:
 
 filter は「レポートを読みやすく保つ」ための判断で、「機能として価値がない」の判断ではありません。
 だから隠さず出します。
+
+## probe
+
+capture がブラウザ側の観測なのに対し、probe は「ブラウザ無しでどこまで届くか」の観測です。
+設定の `cookies` から Cookie と UA を読み、`base_url` のホストに載るぶんだけを cookiejar に入れて、
+素の HTTP クライアントで URL を叩きます。リダイレクトは追います。
+
+```bash
+apigap probe -c capture/apigap.yaml https://app.example.com/items/42
+apigap probe -c capture/apigap.yaml --tls chrome --h1 --format json https://app.example.com/search?q=go
+```
+
+| フラグ | 既定 | 意味 |
+| --- | --- | --- |
+| `--tls go\|chrome` | `go` | ClientHello を `crypto/tls` の素の形にするか、utls の Chrome 相当にするか |
+| `--h1` | off | ALPN を `http/1.1` だけにする。既定は `h2, http/1.1` |
+| `--plain` | off | `sec-ch-ua*` / `sec-fetch-*` / `upgrade-insecure-requests` を付けない |
+| `--post` | off | クエリを form body に移して POST する |
+| `--no-redirect` | off | リダイレクトを追わず、最初の応答を返す |
+| `--out <path>` | — | 最後のレスポンス本文を書き出す |
+| `--format markdown\|json` | `markdown` | 出力形式 |
+
+1 URL につき proto / status / `cf-mitigated` / content-type / 本文長 / 所要時間 / `<title>` /
+最終 URL / Set-Cookie の名前を出します。Set-Cookie は HAR と同じく名前だけで、値は残しません
+(302 で発行されるぶんは最終応答に残らないので、途中の応答から拾います)。
+
+`sec-ch-ua` のバージョンと `sec-ch-ua-platform` は Cookie ファイルの UA から組みます。UA が
+Chromium 系でなければ、辻褄の合わない値を送るより付けないほうを選びます。
+`Accept-Encoding` は gzip だけを送り、展開は probe 側でします。
+`HTTPS_PROXY` (CONNECT + Basic 認証) があれば経由します。
+
+既定 (`--tls go` で `--h1` なし) は HTTP/2 に固定されます。h2 を受けないサーバーが相手だと、
+http/1.1 へ落ちずにエラーになります。そのときは `--h1` を付けてください。
+
+### 何が効くかは決め打ちしない
+
+WAF 配下のあるサイトに対して、同じ Cookie と UA で軸だけ変えたときの観測です。
+
+| 条件 | 結果 |
+| --- | --- |
+| `crypto/tls` + HTTP/2 + Chrome 風ヘッダ | 200 |
+| 同じでヘッダ無し (`--plain`) | 403 challenge |
+| 同じで http/1.1 (`--h1`) | 403 challenge |
+| utls の Chrome ClientHello + HTTP/2 + Chrome 風ヘッダ | 403 challenge (3 回とも) |
+| `curl` | 403 challenge |
+
+これは 1 サイト・1 時点の観測であって、因果でも一般則でもありません。少なくとも
+「TLS 指紋を似せれば通る」は成り立たず、この場ではプロトコルとヘッダの組み合わせのほうが
+効きました。別のサイトでは別の軸が効くかもしれないので、probe は軸を切り替えて表にするだけで、
+どれが効くかは決めません。

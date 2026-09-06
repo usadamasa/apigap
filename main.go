@@ -22,6 +22,8 @@ func main() {
 		err = runGap(os.Args[2:])
 	case "sanitize":
 		err = runSanitize(os.Args[2:])
+	case "probe":
+		err = runProbe(os.Args[2:])
 	case "-h", "--help", "help":
 		printUsage()
 		return
@@ -43,6 +45,7 @@ Commands:
   capture   Open every scenario page with the saved cookies and write a HAR
   gap       Report observed endpoints the repository does not know yet
   sanitize  Mask credentials in a HAR recorded elsewhere (e.g. DevTools export)
+  probe     Fetch URLs with the saved cookies from a plain HTTP client, no browser
 
 Every command takes -c <apigap.yaml> (default: ./apigap.yaml).
 `)
