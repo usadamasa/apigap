@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # 2 つとも group は作らず、パッケージごとに PR を出させる。group の PR が開いた
+  # ままだと同じ group の更新が全部止まり、1 つの更新の不具合で他の更新まで
+  # 巻き添えになる。
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
