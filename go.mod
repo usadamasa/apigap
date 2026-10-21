@@ -3,7 +3,7 @@ module github.com/usadamasa/apigap
 go 1.27.3
 
 require (
-	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
+	github.com/chromedp/cdproto v0.158.2
 	github.com/chromedp/chromedp v0.16.0
 	github.com/refraction-networking/utls v1.8.2
 	golang.org/x/net v0.61.0
@@ -12,7 +12,6 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
