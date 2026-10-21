@@ -2,7 +2,7 @@
 //
 // chromedp の高レベル API (NewContext / Run) や Playwright は使わない。どちらもターゲットに
 // 繋いだ瞬間に Runtime.enable を打ち、Cloudflare Turnstile がそれを検知してチャレンジを
-// 解かなくなる。ここでは websocket 接続 (chromedp.Conn) と cdproto の型だけを借り、
+// 解かなくなる。ここでは websocket 接続 (chromedp/remote の Conn) と cdproto の型だけを借り、
 // Network ドメインのイベントを購読するだけで DOM や Runtime には一切触れない。
 package chrome
 
@@ -28,7 +28,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
-	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 )
 
 // Options は Chrome の起動オプション。
@@ -45,7 +45,7 @@ type Browser struct {
 	userDataDir string
 	port        int // DevToolsActivePort から読めるまでは 0
 	exited      chan error
-	conn        *chromedp.Conn
+	conn        *remote.Conn
 	next        atomic.Int64
 	mu          sync.Mutex
 	pending     map[int64]chan *cdproto.Message
@@ -144,7 +144,7 @@ func (b *Browser) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	conn, err := chromedp.DialContext(ctx, ver.WebSocketDebuggerURL)
+	conn, err := remote.DialContext(ctx, ver.WebSocketDebuggerURL)
 	if err != nil {
 		return fmt.Errorf("CDP への接続に失敗しました: %w", err)
 	}
@@ -341,13 +341,13 @@ type Page struct {
 
 // NewPage は about:blank のタブを開いて繋ぐ。Runtime は enable しない。
 func (b *Browser) NewPage(ctx context.Context) (*Page, error) {
-	var created target.CreateTargetReturns
-	if err := b.Call(ctx, "", target.CommandCreateTarget, &target.CreateTargetParams{URL: "about:blank"}, &created); err != nil {
+	var created target.CreateTargetResult
+	if err := b.Call(ctx, "", target.CreateTarget.Method, &target.CreateTargetParams{URL: "about:blank"}, &created); err != nil {
 		return nil, err
 	}
-	var attached target.AttachToTargetReturns
-	if err := b.Call(ctx, "", target.CommandAttachToTarget,
-		&target.AttachToTargetParams{TargetID: created.TargetID, Flatten: true}, &attached); err != nil {
+	var attached target.AttachToTargetResult
+	if err := b.Call(ctx, "", target.AttachToTarget.Method,
+		&target.AttachToTargetParams{TargetID: created.TargetID, Flatten: new(true)}, &attached); err != nil {
 		return nil, err
 	}
 	return &Page{b: b, sessionID: attached.SessionID}, nil
@@ -370,23 +370,22 @@ func (p *Page) SetCookies(ctx context.Context, cookies []*http.Cookie) error {
 			Secure: c.Secure, HTTPOnly: c.HttpOnly,
 		}
 		if !c.Expires.IsZero() {
-			t := cdp.TimeSinceEpoch(c.Expires)
-			cp.Expires = &t
+			cp.Expires = cdp.TimeSinceEpoch(c.Expires.Unix())
 		}
 		params = append(params, cp)
 	}
-	return p.Call(ctx, network.CommandSetCookies, &network.SetCookiesParams{Cookies: params}, nil)
+	return p.Call(ctx, network.SetCookies.Method, &network.SetCookiesParams{Cookies: params}, nil)
 }
 
 // EnableNetwork は Network イベントの購読を始める。POST 本文はイベントに同梱させる。
 func (p *Page) EnableNetwork(ctx context.Context) error {
-	return p.Call(ctx, network.CommandEnable, &network.EnableParams{MaxPostDataSize: 1 << 20}, nil)
+	return p.Call(ctx, network.Enable.Method, &network.EnableParams{MaxPostDataSize: new(int64(1 << 20))}, nil)
 }
 
 // Navigate は url へ遷移する。文書の応答が届くまで返らない。
 func (p *Page) Navigate(ctx context.Context, url string) error {
-	var nav page.NavigateReturns
-	if err := p.Call(ctx, page.CommandNavigate, &page.NavigateParams{URL: url}, &nav); err != nil {
+	var nav page.NavigateResult
+	if err := p.Call(ctx, page.Navigate.Method, &page.NavigateParams{URL: url}, &nav); err != nil {
 		return err
 	}
 	if nav.ErrorText != "" {

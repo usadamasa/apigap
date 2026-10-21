@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/target"
 
@@ -366,8 +367,8 @@ func (r *recorder) startPage(id, title string) {
 // *ExtraInfo 系のイベントは見ない。生の Cookie ヘッダが載っているのはそこで、
 // 記録しないのが一番確実な秘匿になる。
 func (r *recorder) handle(msg *cdproto.Message) *docEvent {
-	switch msg.Method {
-	case cdproto.EventNetworkRequestWillBeSent:
+	switch string(msg.Method) {
+	case network.RequestWillBeSent.Method:
 		var ev network.EventRequestWillBeSent
 		if err := json.Unmarshal(msg.Params, &ev); err != nil {
 			slog.Debug("イベントを解釈できませんでした", "method", msg.Method, "err", err)
@@ -376,10 +377,10 @@ func (r *recorder) handle(msg *cdproto.Message) *docEvent {
 		if ev.RedirectResponse != nil {
 			if p, ok := r.open[ev.RequestID]; ok {
 				fillResponse(&p.entry, ev.RedirectResponse)
-				r.complete(p, ev.WallTime.Time())
+				r.complete(p, wallTime(ev.WallTime))
 			}
 		}
-		p := &pending{id: ev.RequestID, started: ev.WallTime.Time()}
+		p := &pending{id: ev.RequestID, started: wallTime(ev.WallTime)}
 		p.entry = Entry{
 			Pageref:         r.pageref,
 			StartedDateTime: p.started,
@@ -405,7 +406,7 @@ func (r *recorder) handle(msg *cdproto.Message) *docEvent {
 			}
 		}
 		r.open[ev.RequestID] = p
-	case cdproto.EventNetworkResponseReceived:
+	case network.ResponseReceived.Method:
 		var ev network.EventResponseReceived
 		if json.Unmarshal(msg.Params, &ev) != nil {
 			return nil
@@ -418,7 +419,7 @@ func (r *recorder) handle(msg *cdproto.Message) *docEvent {
 		if ev.Type == network.ResourceTypeDocument && r.hosts[hostOf(ev.Response.URL)] {
 			return &docEvent{status: int(ev.Response.Status), challenge: isChallenge(ev.Response.Headers)}
 		}
-	case cdproto.EventNetworkLoadingFinished:
+	case network.LoadingFinished.Method:
 		var ev network.EventLoadingFinished
 		if json.Unmarshal(msg.Params, &ev) != nil {
 			return nil
@@ -427,7 +428,7 @@ func (r *recorder) handle(msg *cdproto.Message) *docEvent {
 			p.size = int(ev.EncodedDataLength)
 			r.complete(p, time.Now())
 		}
-	case cdproto.EventNetworkLoadingFailed:
+	case network.LoadingFailed.Method:
 		var ev network.EventLoadingFailed
 		if json.Unmarshal(msg.Params, &ev) != nil {
 			return nil
@@ -441,19 +442,20 @@ func (r *recorder) handle(msg *cdproto.Message) *docEvent {
 	return nil
 }
 
+// wallTime は CDP の epoch 秒 (小数) を time.Time にする。
+func wallTime(t cdp.TimeSinceEpoch) time.Time {
+	return time.UnixMicro(int64(t.Float64() * 1e6))
+}
+
 // postData は Network.enable の maxPostDataSize 以内で同梱された POST 本文を復元する。
-// Chrome は base64 のチャンク列で渡してくる。
+// Chrome は base64 のチャンク列で渡し、cdproto が []byte へ復号済み。
 func postData(req *network.Request) string {
 	if !req.HasPostData || len(req.PostDataEntries) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	for _, e := range req.PostDataEntries {
-		raw, err := base64.StdEncoding.DecodeString(e.Bytes)
-		if err != nil {
-			return ""
-		}
-		sb.Write(raw)
+		sb.Write(e.Bytes)
 	}
 	return sb.String()
 }
@@ -529,17 +531,18 @@ func wantBody(p *pending) bool {
 func (r *recorder) flush(ctx context.Context, page *chrome.Page) error {
 	for _, p := range r.ready {
 		if wantBody(p) {
-			var body network.GetResponseBodyReturns
+			var body network.GetResponseBodyResult
 			bctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := page.Call(bctx, network.CommandGetResponseBody, &network.GetResponseBodyParams{RequestID: p.id}, &body)
+			err := page.Call(bctx, network.GetResponseBody.Method, &network.GetResponseBodyParams{RequestID: p.id}, &body)
 			cancel()
 			if err != nil {
 				slog.Debug("本文を取れませんでした", "url", p.entry.Request.URL, "err", err)
+			} else if body.Base64encoded {
+				// cdproto が復号済みの本文を、HAR の encoding: base64 に合わせて符号化し直す。
+				p.entry.Response.Content.Text = base64.StdEncoding.EncodeToString(body.Body)
+				p.entry.Response.Content.Encoding = "base64"
 			} else {
-				p.entry.Response.Content.Text = body.Body
-				if body.Base64encoded {
-					p.entry.Response.Content.Encoding = "base64"
-				}
+				p.entry.Response.Content.Text = string(body.Body)
 			}
 		}
 		p.entry.Response.Content.Size = p.size
