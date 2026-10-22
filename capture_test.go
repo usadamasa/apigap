@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -12,45 +11,18 @@ import (
 	"github.com/chromedp/cdproto/network"
 )
 
-// event は CDP イベントを組み立てる。cdproto の型を素直に Marshal すると、未指定の
-// 列挙が "" で、timestamp が null で出てしまい Unmarshal が拒む。実機の Chrome は
-// どちらも必ず埋めて送るので、ここでは空の値を落として同じ形にする。
-func event(t *testing.T, method cdproto.MethodType, params any) *cdproto.Message {
+// event は CDP イベントを組み立てる。
+func event(t *testing.T, method string, params any) *cdproto.Message {
 	t.Helper()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
-	}
-	dropEmpty(m)
-	if m["timestamp"] == nil {
-		m["timestamp"] = 1.5
-	}
-	raw, _ = json.Marshal(m)
-	return &cdproto.Message{Method: method, Params: raw}
+	return &cdproto.Message{Method: cdproto.MethodType(method), Params: raw}
 }
 
-func dropEmpty(m map[string]any) {
-	for k, v := range m {
-		switch x := v.(type) {
-		case nil:
-			delete(m, k)
-		case string:
-			if x == "" {
-				delete(m, k)
-			}
-		case map[string]any:
-			dropEmpty(x)
-		}
-	}
-}
-
-func wall(t time.Time) *cdp.TimeSinceEpoch {
-	w := cdp.TimeSinceEpoch(t)
-	return &w
+func wall(t time.Time) cdp.TimeSinceEpoch {
+	return cdp.TimeSinceEpoch(float64(t.UnixMicro()) / 1e6)
 }
 
 func TestRecorder_MasksCredentialsAndSplitsRedirects(t *testing.T) {
@@ -59,17 +31,17 @@ func TestRecorder_MasksCredentialsAndSplitsRedirects(t *testing.T) {
 	now := time.Now()
 
 	// 1. 検索ページ: 302 → 200 のリダイレクト連鎖 (requestId は同じ)
-	rec.handle(event(t, cdproto.EventNetworkRequestWillBeSent, network.EventRequestWillBeSent{
+	rec.handle(event(t, network.RequestWillBeSent.Method, network.EventRequestWillBeSent{
 		RequestID: "1", Type: network.ResourceTypeDocument, WallTime: wall(now),
 		Request: &network.Request{Method: "GET", URL: "https://app.example.com/search?q=x",
 			Headers: network.Headers{"Cookie": "cf_clearance=SECRET-COOKIE", "Accept": "text/html"}},
 	}))
-	rec.handle(event(t, cdproto.EventNetworkRequestWillBeSent, network.EventRequestWillBeSent{
+	rec.handle(event(t, network.RequestWillBeSent.Method, network.EventRequestWillBeSent{
 		RequestID: "1", Type: network.ResourceTypeDocument, WallTime: wall(now.Add(50 * time.Millisecond)),
 		Request:          &network.Request{Method: "GET", URL: "https://app.example.com/search?q=x&page=1", Headers: network.Headers{}},
 		RedirectResponse: &network.Response{URL: "https://app.example.com/search?q=x", Status: 302, Headers: network.Headers{"Location": "/search?q=x&page=1", "Set-Cookie": "JSESSIONID=SECRET-SESSION"}},
 	}))
-	doc := rec.handle(event(t, cdproto.EventNetworkResponseReceived, network.EventResponseReceived{
+	doc := rec.handle(event(t, network.ResponseReceived.Method, network.EventResponseReceived{
 		RequestID: "1", Type: network.ResourceTypeDocument,
 		Response: &network.Response{URL: "https://app.example.com/search?q=x&page=1", Status: 200, MimeType: "text/html",
 			Headers: network.Headers{"Content-Type": "text/html", "Set-Cookie": "AWSALB=SECRET-ALB"}},
@@ -77,23 +49,23 @@ func TestRecorder_MasksCredentialsAndSplitsRedirects(t *testing.T) {
 	if doc == nil || !doc.settled() {
 		t.Fatalf("200 の Document は settled のはず: %+v", doc)
 	}
-	rec.handle(event(t, cdproto.EventNetworkLoadingFinished, network.EventLoadingFinished{RequestID: "1", EncodedDataLength: 1234}))
+	rec.handle(event(t, network.LoadingFinished.Method, network.EventLoadingFinished{RequestID: "1", EncodedDataLength: 1234}))
 
 	// 2. 認可ヘッダ付き XHR (POST 本文あり)
-	rec.handle(event(t, cdproto.EventNetworkRequestWillBeSent, network.EventRequestWillBeSent{
+	rec.handle(event(t, network.RequestWillBeSent.Method, network.EventRequestWillBeSent{
 		RequestID: "2", Type: network.ResourceTypeXHR, WallTime: wall(now),
 		Request: &network.Request{Method: "POST", URL: "https://app.example.com/api/track", HasPostData: true,
-			PostDataEntries: []*network.PostDataEntry{{Bytes: base64.StdEncoding.EncodeToString([]byte(`{"q":1}`))}},
+			PostDataEntries: []*network.PostDataEntry{{Bytes: []byte(`{"q":1}`)}},
 			Headers:         network.Headers{"Authorization": "Bearer SECRET-TOKEN", "Content-Type": "application/json"}},
 	}))
-	rec.handle(event(t, cdproto.EventNetworkLoadingFailed, network.EventLoadingFailed{RequestID: "2", ErrorText: "net::ERR_ABORTED"}))
+	rec.handle(event(t, network.LoadingFailed.Method, network.EventLoadingFailed{RequestID: "2", ErrorText: "net::ERR_ABORTED"}))
 
 	// 3. チャレンジ応答は settled にならない
-	rec.handle(event(t, cdproto.EventNetworkRequestWillBeSent, network.EventRequestWillBeSent{
+	rec.handle(event(t, network.RequestWillBeSent.Method, network.EventRequestWillBeSent{
 		RequestID: "3", Type: network.ResourceTypeDocument, WallTime: wall(now),
 		Request: &network.Request{Method: "GET", URL: "https://app.example.com/items/42", Headers: network.Headers{}},
 	}))
-	doc = rec.handle(event(t, cdproto.EventNetworkResponseReceived, network.EventResponseReceived{
+	doc = rec.handle(event(t, network.ResponseReceived.Method, network.EventResponseReceived{
 		RequestID: "3", Type: network.ResourceTypeDocument,
 		Response: &network.Response{URL: "https://app.example.com/items/42", Status: 403, Headers: network.Headers{"cf-mitigated": "challenge"}},
 	}))
