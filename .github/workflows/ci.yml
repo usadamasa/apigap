@@ -6,7 +6,6 @@ name: CI
       - opened
       - synchronize
       - reopened
-      - edited
   push:
     branches: [main]
 
