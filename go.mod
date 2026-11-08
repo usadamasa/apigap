@@ -3,7 +3,7 @@ module github.com/usadamasa/apigap
 go 1.27.3
 
 require (
-	github.com/chromedp/cdproto v0.158.4
+	github.com/chromedp/cdproto v0.159.1
 	github.com/chromedp/chromedp v0.21.0
 	github.com/refraction-networking/utls v1.8.2
 	golang.org/x/net v0.61.0
